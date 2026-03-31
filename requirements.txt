@@ -7,3 +7,5 @@ pandas
 numpy
 pyMuPDF
 PyPDF2
+openai
+python-dotenv
