@@ -262,10 +262,11 @@ if analyze_button:
             with st.spinner("🧠 AI is analyzing your resume... Please wait."):
             # Reusing the existing engine API without changes
                 semantic_score = engine.get_semantic_match(resume_text, job_desc)
-                hard_score, missing_skills, found_skills = engine.get_hard_skills_analysis(resume_text, job_desc)
+                hard_score, missing_skills, found_skills, ai_error = engine.get_hard_skills_analysis(resume_text, job_desc)
                 tips = engine.generate_tips(missing_skills)
             
         st.markdown("---")
+            
         st.header("📊 Analysis Results")
         
         # Display Scores

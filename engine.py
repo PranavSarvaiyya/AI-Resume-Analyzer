@@ -60,29 +60,51 @@ def update_skills_file(new_skills_list):
             print(f"Skipping JSON update, Error: {e}")
 
 def extract_new_skills_with_ai(text):
-    """Uses LLM to detect unseen keywords (skills/tools) in JD/Resume."""
+    """Uses LLM to detect unseen keywords (hard skills and soft skills) in JD/Resume."""
     try:
-        if not client: return
-        prompt = f"Extract a comma-separated list of ONLY technical skills, programming languages, tools, or frameworks from this text. Do not include soft skills. If none, return 'None'. Text: {text[:2000]}"
+        if not client: raise Exception("AI Client not configured (check .env API key)")
+        # PROMPT CHANGED: Using strict rules to prevent AI from extracting invalid words
+        prompt = f"""You are a strict HR Technical Recruiter.
+Extract a comma-separated list of ONLY valid skills from this text.
+Strict Rules:
+1. Include standard technical skills (e.g. Python, React, NLP, APIs).
+2. Include one-word standard soft skills (e.g. Leadership, Communication).
+3. ABSOLUTELY DO NOT include job perks (Competitive Pay, Remote), university names (IIT, NIT), company names, locations (SF, Hyderabad), or generic adjectives/phrases (Technically Strong, Domain Experts, Driving Innovation).
+4. Output NOTHING but the comma-separated list. If none, return 'None'.
+
+Text: {text[:2000]}"""
+        
         completion = client.chat.completions.create(
-            model="google/gemma-2-27b-it",
+            model="meta/llama-3.1-8b-instruct", # Using a highly reliable model
             messages=[{"role":"user","content":prompt}],
-            temperature=0.2,
-            top_p=0.7,
+            temperature=0.0,
+            top_p=1.0,
             max_tokens=1024,
             stream=False
         )
+        
         response_text = completion.choices[0].message.content
+        
         if response_text and response_text.strip().lower() != 'none':
-            skills = [s.strip() for s in response_text.split(',')]
+            # LOGIC CHANGED: Added cleaning to strip conversational text AI might add
+            if ":" in response_text:
+                 response_text = response_text.split(":")[-1]
+            response_text = response_text.replace('\n', ',') # replace new lines if any
+            
+            skills = [s.strip() for s in response_text.split(',') if s.strip()]
             update_skills_file(skills)
+        return None # None means no error
+            
     except Exception as e:
-        print(f"Error extracting skills: {e}")
+        # Pata chalega agar terminal me koi error aata hai
+        error_msg = str(e)
+        print(f"API Error (Fallback skipped to prevent junk values): {error_msg}")
+        return None # Return None without running broad regex to avoid garbage data
 
 def get_hard_skills_analysis(resume_text, job_desc):
     """Identifies missing and matching keywords."""
     # First, let AI scan and dynamically grow the TECH_LIBRARY dictionary
-    extract_new_skills_with_ai(job_desc + " " + resume_text)
+    ai_error = extract_new_skills_with_ai(job_desc + " " + resume_text)
     
     resume_text = str(resume_text).lower()
     job_desc = str(job_desc).lower()
@@ -91,7 +113,7 @@ def get_hard_skills_analysis(resume_text, job_desc):
     required_in_job = [skill for skill in TECH_LIBRARY if re.search(r'\b' + re.escape(skill) + r'\b', job_desc)]
     
     if not required_in_job:
-        return 0, [], []
+        return 0, [], [], ai_error
 
     # Find which of those are in Resume
     found_in_resume = [skill for skill in required_in_job if re.search(r'\b' + re.escape(skill) + r'\b', resume_text)]
@@ -99,7 +121,7 @@ def get_hard_skills_analysis(resume_text, job_desc):
     missing_skills = list(set(required_in_job) - set(found_in_resume))
     match_ratio = (len(found_in_resume) / len(required_in_job)) * 100
     
-    return round(match_ratio, 2), missing_skills, found_in_resume
+    return round(match_ratio, 2), missing_skills, found_in_resume, ai_error
 
 def generate_tips(missing_skills):
     """Generates dynamic AI 'Improvisation' or advice based on gaps."""
@@ -110,23 +132,32 @@ def generate_tips(missing_skills):
 
     tips.append(f"👉 **Focus on adding these to your Tech Stack:** {', '.join([s.upper() for s in missing_skills])}")
 
-    # AI-based drafting tips (using NVIDIA/Gemma)
+    # AI-based drafting tips (using NVIDIA/Gemma or Llama)
     if client:
         try:
-            prompt = f"The user is missing these technical skills from their resume: {', '.join(missing_skills)}. Keep it concise. For EACH skill independently, generate exactly ONE highly professional, actionable resume bullet point (drafting tip) that they could use if they learn it. Start each tip with '💡 **Drafting Tip ([Skill Name]):** '"
+            # We limit to generating tips for maximum 5 skills to avoid token limits breaking the formatting
+            target_skills = missing_skills[:5]
+            more_needed = len(missing_skills) > 5
+            
+            prompt = f"The user is missing these technical and soft skills from their resume: {', '.join(target_skills)}.\nFor EACH skill independently, provide detailed guidance covering:\n1. How they can improve or learn it?\n2. Which topics within this skill are most important?\n3. What kind of project they should build to showcase it?\n\nFormat your response cleanly. Use '💡 **[Skill Name]**' as the header for each skill, followed by the detailed explanation."
             completion = client.chat.completions.create(
-                model="google/gemma-2-27b-it",
+                model="meta/llama-3.1-8b-instruct",
                 messages=[{"role":"user","content":prompt}],
-                temperature=0.2,
-                top_p=0.7,
-                max_tokens=1024,
+                temperature=0.3,
+                top_p=0.8,
+                max_tokens=2048,
                 stream=False
             )
             response_text = completion.choices[0].message.content
             if response_text:
-                for line in response_text.split('\n'):
-                    if line.strip().startswith("💡") or line.strip().startswith("**"):
-                        tips.append(line.strip())
+                # Keep the entire detailed formatting instead of filtering lines.
+                blocks = response_text.split("💡")
+                for block in blocks:
+                    if block.strip():
+                        tips.append("💡 " + block.strip() + "\n")
+                        
+                if more_needed:
+                    tips.append(f"\n*Note: You have {len(missing_skills) - 5} more missing skills. Focus on the top 5 above first!*")
             return tips
         except Exception as e:
             print(f"AI Tip Error: {e}")
